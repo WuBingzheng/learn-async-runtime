@@ -65,7 +65,7 @@ pub struct TcpStream {
 impl TcpStream {
     fn from_std(s: std::net::TcpStream) -> Self {
         TcpStream {
-            inner: Rc::new(RefCell::new(s))
+            inner: Rc::new(RefCell::new(s)),
         }
     }
 
@@ -102,13 +102,13 @@ impl<'a> Future for ReadFut<'a> {
                 Poll::Ready(Ok(len))
             }
             Err(e) => {
-                if e.kind() == ErrorKind::WouldBlock {
+                if e.kind() != ErrorKind::WouldBlock {
+                    Poll::Ready(Err(e))
+                } else {
                     let waker = cx.waker().clone();
                     fut.waker = Some(waker);
                     event::add_readable(inner.as_raw_fd(), &mut fut.waker);
                     Poll::Pending
-                } else {
-                    Poll::Ready(Err(e))
                 }
             }
         }

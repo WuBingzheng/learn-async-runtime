@@ -2,9 +2,12 @@ use std::future::Future;
 use std::task::{Context, Poll};
 use std::pin::Pin;
 
+use std::time::Duration;
+
 mod runtime;
 mod event;
 mod tcplistener;
+mod timer;
 
 async fn r42() -> usize {
     42
@@ -66,14 +69,15 @@ async fn biz_woker() -> &'static str {
     let mut tcp = listen.accept().await.unwrap();
 
     let mut buf = [0u8; 100];
-    let len = tcp.read(&mut buf).await.unwrap();
-    println!("read: {}: {}", len, std::str::from_utf8(&buf).unwrap());
+    let len = timer::timeout(Duration::from_secs(3), tcp.read(&mut buf)).await;
+    println!("read: {:?}: {}", len, std::str::from_utf8(&buf).unwrap());
 
     tcp.write(&buf).await.unwrap();
 
-    let len = tcp.read(&mut buf).await.unwrap();
-    println!("read again: {}", len);
+    let olen = timer::timeout(Duration::from_secs(3), tcp.read(&mut buf)).await;
+    println!("read again: {:?}", olen);
 
+    timer::sleep(Duration::from_secs(3)).await;
     "ok, done!"
 }
 

@@ -272,28 +272,39 @@ impl Task {
             |active_tasks| active_tasks.push_back(Task(header)));
     }
 
+    fn poll_active_tasks() {
+        loop {
+            let mut active_tasks = Self::ACTIVE_TASKS.take();
+            if active_tasks.is_empty() {
+                break;
+            }
+            println!("poll_active_tasks: ready={}", active_tasks.len());
+
+            while let Some(task) = active_tasks.pop_front() {
+                let header = unsafe { &mut *task.0 };
+                println!(">>> scheduler task: {:p} {:?}", header, header.state);
+                (header.vtable.poll_task)(header);
+            }
+        }
+    }
+
     fn run<T>(mut outer_join: JoinHandle<T>) -> T {
         loop {
-            loop {
-                let mut active_tasks = Self::ACTIVE_TASKS.take();
-                if active_tasks.is_empty() {
-                    break;
-                }
-                println!("looooop: ready={}", active_tasks.len());
+            let timeout = event::run_timer();
 
-                while let Some(task) = active_tasks.pop_front() {
-                    let header = unsafe { &mut *task.0 };
-                    println!(">>> scheduler task: {:p} {:?}", header, header.state);
-                    (header.vtable.poll_task)(header);
-                }
-            }
-
+            Self::poll_active_tasks();
             if let Some(output) = outer_join.try_get_output() {
-                println!("runtime end");
                 return output;
             }
 
-            event::run();
+            println!("event wait timeout: {:?}", timeout);
+
+            event::run_event(timeout);
+
+            Self::poll_active_tasks();
+            if let Some(output) = outer_join.try_get_output() {
+                return output;
+            }
         }
     }
 }
