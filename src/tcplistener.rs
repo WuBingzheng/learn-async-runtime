@@ -1,5 +1,7 @@
 use std::rc::Rc;
-use std::net::{ToSocketAddrs, TcpStream};
+use std::io::{Read, Write};
+use std::cell::RefCell;
+use std::net::ToSocketAddrs;
 use std::io::{Result, ErrorKind};
 use std::future::Future;
 use std::task::{Context, Waker, Poll};
@@ -40,19 +42,100 @@ impl Future for AcceptFut {
         match fut.inner.accept() {
             Ok((socket, addr)) => {
                 println!("accept: {:?}", addr);
-                Poll::Ready(Ok(socket))
+                Poll::Ready(Ok(TcpStream::from_std(socket)))
             }
             Err(e) => {
                 if e.kind() == ErrorKind::WouldBlock {
                     let waker = cx.waker().clone();
                     fut.waker = Some(waker);
                     event::add_readable(fut.inner.as_raw_fd(), &mut fut.waker);
-                    /*
-                    let event = Event::readable(&listener.waker as *const Cell<Option<Waker>> as usize);
-                    POLLER.with(
-                        |poller| unsafe { poller.get().unwrap().add(listener.inner.as_raw_fd(), event).unwrap() }
-                    );
-                    */
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Err(e))
+                }
+            }
+        }
+    }
+}
+
+pub struct TcpStream {
+    inner: Rc<RefCell<std::net::TcpStream>>,
+}
+
+impl TcpStream {
+    fn from_std(s: std::net::TcpStream) -> Self {
+        TcpStream {
+            inner: Rc::new(RefCell::new(s))
+        }
+    }
+
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        ReadFut {
+            inner: self.inner.clone(),
+            buf: buf,
+            waker: None,
+        }.await
+    }
+    pub async fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        WriteFut {
+            inner: self.inner.clone(),
+            buf: buf,
+            waker: None,
+        }.await
+    }
+}
+
+struct ReadFut<'a> {
+    inner: Rc<RefCell<std::net::TcpStream>>,
+    buf: &'a mut [u8],
+    waker: Option<Waker>,
+}
+
+impl<'a> Future for ReadFut<'a> {
+    type Output = Result<usize>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let fut = self.get_mut();
+        let mut inner = fut.inner.borrow_mut();
+        match inner.read(fut.buf) {
+            Ok(len) => {
+                Poll::Ready(Ok(len))
+            }
+            Err(e) => {
+                if e.kind() == ErrorKind::WouldBlock {
+                    let waker = cx.waker().clone();
+                    fut.waker = Some(waker);
+                    event::add_readable(inner.as_raw_fd(), &mut fut.waker);
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Err(e))
+                }
+            }
+        }
+    }
+}
+
+struct WriteFut<'a> {
+    inner: Rc<RefCell<std::net::TcpStream>>,
+    buf: &'a [u8],
+    waker: Option<Waker>,
+}
+
+impl<'a> Future for WriteFut<'a> {
+    type Output = Result<usize>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let fut = self.get_mut();
+        let mut inner = fut.inner.borrow_mut();
+        match inner.write(fut.buf) {
+            Ok(len) => {
+                Poll::Ready(Ok(len))
+            }
+            Err(e) => {
+                if e.kind() == ErrorKind::WouldBlock {
+                    let waker = cx.waker().clone();
+                    fut.waker = Some(waker);
+                    event::add_writable(inner.as_raw_fd(), &mut fut.waker);
                     Poll::Pending
                 } else {
                     Poll::Ready(Err(e))

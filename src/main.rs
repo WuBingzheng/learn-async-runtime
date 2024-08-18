@@ -63,7 +63,16 @@ async fn biz_woker() -> &'static str {
     runtime::spwan(async { println!("> ret: {}", r123.await) });
 
     let listen = tcplistener::TcpListener::bind("127.0.0.1:4444").await.unwrap();
-    let _tcp = listen.accept().await.unwrap();
+    let mut tcp = listen.accept().await.unwrap();
+
+    let mut buf = [0u8; 100];
+    let len = tcp.read(&mut buf).await.unwrap();
+    println!("read: {}: {}", len, std::str::from_utf8(&buf).unwrap());
+
+    tcp.write(&buf).await.unwrap();
+
+    let len = tcp.read(&mut buf).await.unwrap();
+    println!("read again: {}", len);
 
     "ok, done!"
 }

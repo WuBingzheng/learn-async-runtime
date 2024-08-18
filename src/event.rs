@@ -29,6 +29,13 @@ pub fn add_readable(raw_fd: RawFd, waker: &mut Option<Waker>) {
     });
 }
 
+pub fn add_writable(raw_fd: RawFd, waker: &mut Option<Waker>) {
+    POLLER.with(|poller| {
+        let event = Event::writable(waker as *mut Option<Waker> as usize);
+        unsafe { poller.get().unwrap().add(raw_fd, event).unwrap() }
+    });
+}
+
 pub fn init() {
     POLLER.with(|poller|
         poller.set(Poller::new().unwrap()).unwrap()
