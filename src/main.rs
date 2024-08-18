@@ -6,7 +6,7 @@ use std::time::Duration;
 
 mod runtime;
 mod event;
-mod tcplistener;
+mod tcp;
 mod timer;
 
 async fn r42() -> usize {
@@ -65,16 +65,16 @@ async fn biz_woker() -> &'static str {
     runtime::spwan(async { println!("> ret: {}", hello.await) });
     runtime::spwan(async { println!("> ret: {}", r123.await) });
 
-    let listen = tcplistener::TcpListener::bind("127.0.0.1:4444").await.unwrap();
-    let mut tcp = listen.accept().await.unwrap();
+    let listen = tcp::TcpListener::bind("127.0.0.1:4444").await.unwrap();
+    let mut stream = listen.accept().await.unwrap();
 
     let mut buf = [0u8; 100];
-    let len = timer::timeout(Duration::from_secs(3), tcp.read(&mut buf)).await;
+    let len = timer::timeout(Duration::from_secs(3), stream.read(&mut buf)).await;
     println!("read: {:?}: {}", len, std::str::from_utf8(&buf).unwrap());
 
-    tcp.write(&buf).await.unwrap();
+    stream.write(&buf).await.unwrap();
 
-    let olen = timer::timeout(Duration::from_secs(3), tcp.read(&mut buf)).await;
+    let olen = timer::timeout(Duration::from_secs(3), stream.read(&mut buf)).await;
     println!("read again: {:?}", olen);
 
     timer::sleep(Duration::from_secs(3)).await;

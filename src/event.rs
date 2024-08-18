@@ -4,7 +4,7 @@ use std::os::fd::{RawFd};
 use std::task::Waker;
 use std::collections::BTreeMap;
 use std::time::{Instant, Duration};
-use polling::{Event, Events, Poller};
+use polling::{Event, Events, Poller, PollMode};
 
 thread_local! {
     static POLLER: OnceCell<Poller> = OnceCell::new();
@@ -19,9 +19,8 @@ pub fn run_event(timeout: Option<Duration>) {
         poller.get().unwrap().wait(&mut events, timeout).unwrap();
 
         for ev in events.iter() {
-            let waker = unsafe { &mut *(ev.key as *mut Option<Waker>) };
-            let waker = waker.take().unwrap();
-            waker.wake();
+            let waker = unsafe { &mut *(ev.key as *mut Waker) };
+            waker.wake_by_ref();
             println!("get event: {}", ev.key);
         }
     });
@@ -44,18 +43,17 @@ pub fn run_timer() -> Option<Duration> {
     })
 }
 
-pub fn add_readable(raw_fd: RawFd, waker: &mut Option<Waker>) {
+pub fn add_readable(raw_fd: RawFd, waker: *mut Waker) {
     POLLER.with(|poller| {
-        let event = Event::readable(waker as *mut Option<Waker> as usize);
-        //unsafe { poller.get().unwrap().add(raw_fd, event).unwrap() }
-        let _  = unsafe { poller.get().unwrap().add(raw_fd, event) };
+        let event = Event::readable(waker as usize);
+        unsafe { poller.get().unwrap().add_with_mode(raw_fd, event, PollMode::Edge).unwrap() }
     });
 }
 
-pub fn add_writable(raw_fd: RawFd, waker: &mut Option<Waker>) {
+pub fn add_writable(raw_fd: RawFd, waker: *mut Waker) {
     POLLER.with(|poller| {
-        let event = Event::writable(waker as *mut Option<Waker> as usize);
-        unsafe { poller.get().unwrap().add(raw_fd, event).unwrap() }
+        let event = Event::writable(waker as usize);
+        unsafe { poller.get().unwrap().add_with_mode(raw_fd, event, PollMode::Edge).unwrap() }
     });
 }
 
