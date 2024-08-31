@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::mem::ManuallyDrop;
@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::task::{Context, Waker, Poll, RawWaker, RawWakerVTable};
 
 use crate::event;
+use crate::timer;
 
 // RawTask
 struct RawTaskVtable {
@@ -88,7 +89,7 @@ where F: Future<Output = T> + 'static
                 awaker: None,
 
                 vtable: &RawTaskVtable {
-                    poll_task: Self::poll_task,
+                    poll_task: Self::poll_task_handler,
                 },
             },
             u: FutOut {
@@ -97,7 +98,7 @@ where F: Future<Output = T> + 'static
         }
     }
 
-    fn poll_task(ptr: *mut Header) {
+    fn poll_task_handler(ptr: *mut Header) {
         let header = unsafe { &mut *ptr };
         let raw_task = unsafe { &mut *(ptr as *mut RawTask<F, T>) };
 
@@ -152,6 +153,19 @@ where F: Future<Output = T> + 'static
 }
 
 impl Header {
+    thread_local! {
+        static IN_POLLING: Cell<bool> = Cell::new(false);
+    }
+
+    fn poll_task(&mut self) {
+        println!(">>> scheduler task: {:p} {:?}", self, self.state);
+        Self::IN_POLLING.set(true);
+
+        (self.vtable.poll_task)(self);
+
+        Self::IN_POLLING.set(false);
+    }
+
     fn try_drop(&mut self) {
         if self.state == TaskState::Closed && self.waker_refs == 0 {
             unsafe { drop(Box::from_raw(self)); }
@@ -186,7 +200,12 @@ impl Header {
             TaskState::Active => (),
             TaskState::Pending | TaskState::Running => {
                 header.state = TaskState::Active;
-                Task::active(header);
+                if Self::IN_POLLING.get() {
+                    Task::active(header);
+                } else {
+                    Task::active(header);
+                    //header.poll_task(); // for: TIMERS.with_borrow_mut(|timers| {
+                }
             }
             state => {
                 todo!("unexpected state: {:?}", state);
@@ -272,36 +291,38 @@ impl Task {
             |active_tasks| active_tasks.push_back(Task(header)));
     }
 
-    fn poll_active_tasks() {
-        loop {
-            let mut active_tasks = Self::ACTIVE_TASKS.take();
-            if active_tasks.is_empty() {
-                break;
-            }
-            println!("poll_active_tasks: ready={}", active_tasks.len());
-
-            while let Some(task) = active_tasks.pop_front() {
-                let header = unsafe { &mut *task.0 };
-                println!(">>> scheduler task: {:p} {:?}", header, header.state);
-                (header.vtable.poll_task)(header);
-            }
+    fn poll_active_tasks() -> usize {
+        let mut active_tasks = Self::ACTIVE_TASKS.take();
+        let len = active_tasks.len();
+        while let Some(task) = active_tasks.pop_front() {
+            let header = unsafe { &mut *task.0 };
+            header.poll_task();
         }
+        len
     }
 
     fn run<T>(mut outer_join: JoinHandle<T>) -> T {
         loop {
-            let timeout = event::run_timer();
+            // process timer
+            let timeout = loop {
+                let timeout = timer::run();
 
-            Self::poll_active_tasks();
+                if Self::poll_active_tasks() == 0 {
+                    break timeout;
+                }
+            };
             if let Some(output) = outer_join.try_get_output() {
                 return output;
             }
 
-            println!("event wait timeout: {:?}", timeout);
+            // process event
+            event::run(timeout);
 
-            event::run_event(timeout);
-
-            Self::poll_active_tasks();
+            loop {
+                if Self::poll_active_tasks() == 0 {
+                    break;
+                }
+            }
             if let Some(output) = outer_join.try_get_output() {
                 return output;
             }
