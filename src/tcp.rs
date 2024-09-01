@@ -7,6 +7,8 @@ use std::task::{Context, Waker, Poll};
 use std::pin::Pin;
 use std::os::fd::AsRawFd;
 
+use socket2;
+
 use crate::event;
 
 pub struct TcpListener {
@@ -17,7 +19,7 @@ pub struct TcpListener {
 impl TcpListener {
     pub async fn bind<A: ToSocketAddrs>(addr: A) -> Result<TcpListener> {
         let inner = std::net::TcpListener::bind(addr)?;
-        inner.set_nonblocking(true).unwrap();
+        inner.set_nonblocking(true)?;
         Ok(TcpListener { inner, waker: UnsafeCell::new(None) })
     }
     pub async fn accept(&self) -> Result<TcpStream> {
@@ -66,6 +68,25 @@ impl TcpStream {
             inner,
             readable_waker: None,
             writable_waker: None,
+        }
+    }
+
+    pub async fn connect(addr: &socket2::SockAddr) -> Result<Self> {
+        let sock = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
+
+        sock.set_nonblocking(true)?;
+
+        let r = sock.connect(addr);
+
+        let mut stream = TcpStream::from_std(sock.into());
+
+        match r {
+            Ok(()) => Ok(stream),
+            Err(e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {
+                ConnectFut { stream: &mut stream }.await?;
+                Ok(stream)
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -133,6 +154,29 @@ impl<'a> Future for WriteFut<'a> {
                 Poll::Pending
             }
             Err(e) => Poll::Ready(Err(e)),
+        }
+    }
+}
+
+struct ConnectFut<'a> {
+    stream: &'a mut TcpStream,
+}
+
+impl<'a> Future for ConnectFut<'a> {
+    type Output = Result<()>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let fut = self.get_mut();
+        let stream = &mut fut.stream;
+        let inner = &mut stream.inner;
+
+        if stream.writable_waker.is_none() {
+            let waker = cx.waker().clone();
+            let waker = stream.writable_waker.insert(waker);
+            event::add_writable(inner.as_raw_fd(), waker);
+            Poll::Pending
+        } else {
+            Poll::Ready(Ok(()))
         }
     }
 }
