@@ -58,16 +58,18 @@ impl<'a> Future for AcceptFut<'a> {
 
 pub struct TcpStream {
     inner: std::net::TcpStream,
-    readable_waker: Option<Waker>,
-    writable_waker: Option<Waker>,
+    waker: Option<Waker>,
+    reg_readable: bool,
+    reg_writable: bool,
 }
 
 impl TcpStream {
     fn from_std(inner: std::net::TcpStream) -> Self {
         TcpStream {
             inner,
-            readable_waker: None,
-            writable_waker: None,
+            waker: None,
+            reg_readable: false,
+            reg_writable: false,
         }
     }
 
@@ -119,10 +121,17 @@ impl<'a> Future for ReadFut<'a> {
         match inner.read(fut.buf) {
             Ok(len) => Poll::Ready(Ok(len)),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                if stream.readable_waker.is_none() {
+                if !stream.reg_readable {
+                    stream.reg_readable = true;
+
                     let waker = cx.waker().clone();
-                    let waker = stream.readable_waker.insert(waker);
-                    event::add_readable(inner.as_raw_fd(), waker);
+                    let waker = stream.waker.insert(waker);
+
+                    if stream.reg_writable {
+                        event::modify(inner, waker);
+                    } else {
+                        event::add_readable(inner.as_raw_fd(), waker);
+                    }
                 }
                 Poll::Pending
             }
@@ -146,10 +155,17 @@ impl<'a> Future for WriteFut<'a> {
         match inner.write(fut.buf) {
             Ok(len) => Poll::Ready(Ok(len)),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                if stream.writable_waker.is_none() {
+                if !stream.reg_writable {
+                    stream.reg_writable = true;
+
                     let waker = cx.waker().clone();
-                    let waker = stream.writable_waker.insert(waker);
-                    event::add_writable(inner.as_raw_fd(), waker);
+                    let waker = stream.waker.insert(waker);
+
+                    if stream.reg_readable {
+                        event::modify(inner, waker);
+                    } else {
+                        event::add_writable(inner.as_raw_fd(), waker);
+                    }
                 }
                 Poll::Pending
             }
@@ -170,10 +186,18 @@ impl<'a> Future for ConnectFut<'a> {
         let stream = &mut fut.stream;
         let inner = &mut stream.inner;
 
-        if stream.writable_waker.is_none() {
+        if !stream.reg_writable {
+            stream.reg_writable = true;
+
             let waker = cx.waker().clone();
-            let waker = stream.writable_waker.insert(waker);
-            event::add_writable(inner.as_raw_fd(), waker);
+            let waker = stream.waker.insert(waker);
+
+            if stream.reg_readable {
+                event::modify(inner, waker);
+            } else {
+                event::add_writable(inner.as_raw_fd(), waker);
+            }
+
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))

@@ -84,6 +84,7 @@ impl Future for Timer {
 impl Drop for Timer {
     fn drop(&mut self) {
         if self.seq != 0 {
+            self.seq = 0;
             delete_timer(self);
         }
     }

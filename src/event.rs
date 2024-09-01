@@ -3,6 +3,7 @@ use std::os::fd::{RawFd};
 use std::task::Waker;
 use polling::{Event, Events, Poller, PollMode};
 use std::time::Duration;
+use std::os::fd::AsFd;
 
 thread_local! {
     static POLLER: OnceCell<Poller> = OnceCell::new();
@@ -35,6 +36,14 @@ pub fn add_writable(raw_fd: RawFd, waker: *mut Waker) {
         unsafe { poller.get().unwrap().add_with_mode(raw_fd, event, PollMode::Edge).unwrap() }
     });
 }
+
+pub fn modify(raw_fd: impl AsFd, waker: *mut Waker) {
+    POLLER.with(|poller| {
+        let event = Event::all(waker as usize);
+        poller.get().unwrap().modify_with_mode(raw_fd, event, PollMode::Edge).unwrap();
+    });
+}
+
 
 pub fn init() {
     POLLER.with(|poller|

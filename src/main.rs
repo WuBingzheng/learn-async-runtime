@@ -65,6 +65,7 @@ async fn biz_woker() -> &'static str {
     runtime::spwan(async { println!("> ret: {}", hello.await) });
     runtime::spwan(async { println!("> ret: {}", r123.await) });
 
+    /*
     use std::str::FromStr;
     let addr = std::net::SocketAddr::from_str("127.0.0.1:2345").unwrap();
     let addr = socket2::SockAddr::from(addr);
@@ -75,6 +76,7 @@ async fn biz_woker() -> &'static str {
     c.write("hello\n".as_bytes()).await.unwrap();
     c.read(&mut buf).await.unwrap();
     println!("get: {:?}", buf);
+    */
 
     let listen = tcp::TcpListener::bind("127.0.0.1:4444").await.unwrap();
     let mut stream = listen.accept().await.unwrap();
